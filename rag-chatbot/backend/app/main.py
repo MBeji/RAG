@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form # Added Form
 import shutil
 import os
 
@@ -12,7 +12,11 @@ from ..utils.parser import (
     extract_text_from_csv
 )
 from ..utils.chunking import chunk_text
-from ..vector_store.chroma_db import add_documents_to_store
+from ..vector_store.chroma_db import (
+    add_documents_to_store, 
+    query_vector_store, 
+    DEFAULT_EMBEDDING_MODEL # Import the default model name
+)
 
 # Create the data directory if it doesn't exist (relative to this main.py file)
 # backend/app/main.py -> ../../data
@@ -30,7 +34,10 @@ ALLOWED_EXTENSIONS = {
 }
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    embedding_model_name: str = Form(DEFAULT_EMBEDDING_MODEL) # Added form field for model name
+):
     file_extension = os.path.splitext(file.filename)[1].lower()
     
     if file_extension not in ALLOWED_EXTENSIONS:
@@ -63,22 +70,29 @@ async def upload_file(file: UploadFile = File(...)):
             return {"message": f"File '{file.filename}' uploaded, but no text could be extracted. Nothing added to vector store."}
 
         # 2. Chunk text
-        chunks = chunk_text(extracted_text) # Using default chunk_size and chunk_overlap
+        file_is_markdown = file_extension == ".md"
+        chunks = chunk_text(extracted_text, is_markdown=file_is_markdown) # Pass the flag
         if not chunks:
             # If no chunks are generated (e.g., text is too short or empty after extraction)
             return {"message": f"File '{file.filename}' processed, but no chunks were generated (text might be too short or empty). Nothing added to vector store."}
 
         # 3. Prepare metadata and IDs for vector store
         metadatas = [{"source": file.filename, "chunk_num": i} for i, _ in enumerate(chunks)]
-        ids = [f"{file.filename}_chunk_{i}" for i, _ in enumerate(chunks)]
+        ids = [f"{file.filename}_chunk_{i}" for i, _ in enumerate(chunks)] # Base IDs
 
-        # 4. Add to vector store
-        add_documents_to_store(text_chunks=chunks, metadatas=metadatas, ids=ids)
+        # 4. Add to vector store, passing the embedding_model_name
+        add_documents_to_store(
+            text_chunks=chunks, 
+            metadatas=metadatas, 
+            ids=ids,
+            embedding_model_name=embedding_model_name # Pass it here
+        )
         
         return {
-            "message": f"File '{file.filename}' processed and added to vector store.",
+            "message": f"File '{file.filename}' processed with embedding model '{embedding_model_name}' and added to vector store.",
             "filename": file.filename,
-            "total_chunks": len(chunks)
+            "total_chunks": len(chunks),
+            "embedding_model_name": embedding_model_name
         }
     except Exception as e:
         # This catches errors from extraction, chunking, or adding to store
@@ -127,41 +141,52 @@ async def query_documents(q: str = None):
 
 
 from ..models.llm import get_llm_response
-from pydantic import BaseModel # For request body
+from pydantic import BaseModel, Field # Ensure Field is imported if using it for defaults, though not strictly needed for None
+from typing import Optional # For Optional fields
 
 # ... (existing /upload and /query endpoints) ...
 
 class ChatQuery(BaseModel):
     query: str
-    top_k: int = 3 # Number of documents to retrieve for context
-    model_name: str = "llama2" # Allow specifying model per chat request
+    top_k: int = 3
+    model_name: str = "llama2" # LLM model
+    embedding_model_name: str = DEFAULT_EMBEDDING_MODEL
+    relevance_score_threshold: Optional[float] = None # Added, e.g. 1.0 for L2 distance
 
 @app.post("/chat")
 async def chat_with_rag(chat_query: ChatQuery):
     user_query = chat_query.query
     top_k_retrieval = chat_query.top_k
     llm_model_name = chat_query.model_name
+    embedding_model_name_for_query = chat_query.embedding_model_name
+    relevance_threshold_for_query = chat_query.relevance_score_threshold # Get from request
 
     if not user_query:
         raise HTTPException(status_code=400, detail="Query parameter 'query' is required in the request body.")
 
     try:
         # 1. Retrieve relevant documents
-        retrieved_results = query_vector_store(query_text=user_query, top_k=top_k_retrieval)
+        retrieved_results = query_vector_store(
+            query_text=user_query, 
+            top_k=top_k_retrieval,
+            embedding_model_name=embedding_model_name_for_query,
+            relevance_score_threshold=relevance_threshold_for_query # Pass it here
+        )
         
         documents = retrieved_results.get('documents', [[]])[0]
         metadatas = retrieved_results.get('metadatas', [[]])[0]
+        distances = retrieved_results.get('distances', [[]])[0] # Get distances for response
 
         if not documents:
             return {
-                "llm_response": "I could not find any relevant information in the uploaded documents to answer your query.",
-                "sources": []
+                "llm_response": f"I could not find any documents relevant enough (threshold: {relevance_threshold_for_query}, model: '{embedding_model_name_for_query}') to answer your query.",
+                "sources": [],
+                "embedding_model_used": embedding_model_name_for_query,
+                "relevance_threshold_used": relevance_threshold_for_query
             }
 
-        # 2. Augment - Construct the prompt
         context_str = "\n---\n".join(documents)
-        
-        prompt = f"""Based on the following context, please answer the query. If the context does not provide enough information, clearly state that. Do not use any external knowledge beyond the provided context.
+        prompt = f"""Based on the following context (retrieved using embedding model '{embedding_model_name_for_query}' and relevance threshold {relevance_threshold_for_query}), please answer the query. If the context does not provide enough information, clearly state that. Do not use any external knowledge beyond the provided context.
 
 Context:
 ---
@@ -180,29 +205,31 @@ Query: {user_query}"""
             raise HTTPException(status_code=503, detail=llm_answer)
 
 
-        # Prepare sources for the response
+        
+        llm_answer = get_llm_response(prompt_str=prompt, model_name=llm_model_name)
+        
         sources_for_response = []
-        if metadatas:
-            for meta in metadatas:
-                # Ensure 'source' and 'chunk_num' exist, provide defaults if not
+        if metadatas: # Should have same length as documents and distances
+            for i in range(len(documents)):
+                meta = metadatas[i]
+                dist = distances[i] if i < len(distances) else None
                 source_info = {
                     "source_file": meta.get("source", "Unknown source"),
-                    "chunk_number": meta.get("chunk_num", "N/A")
+                    "chunk_number": meta.get("chunk_num", "N/A"),
+                    "embedding_model": meta.get("embedding_model", embedding_model_name_for_query),
+                    "distance": dist
                 }
                 sources_for_response.append(source_info)
         
         return {
             "llm_response": llm_answer,
-            "sources": sources_for_response
+            "sources": sources_for_response,
+            "embedding_model_used": embedding_model_name_for_query,
+            "relevance_threshold_used": relevance_threshold_for_query
         }
 
-    except HTTPException as http_exc: # Re-raise HTTPException if it's already one
-        raise http_exc
     except Exception as e:
-        # Log the exception for debugging
-        print(f"Error in /chat endpoint for query '{user_query}': {e}")
-        # Check if the error message from get_llm_response is being propagated
-        # This part might be redundant if get_llm_response returns the error string and it's handled above
-        if "Error interacting with Ollama" in str(e): # This would catch exceptions raised by get_llm_response
+        print(f"Error in /chat endpoint: {e}")
+        if "Error interacting with Ollama" in str(e):
              raise HTTPException(status_code=503, detail=str(e))
         raise HTTPException(status_code=500, detail=f"Error processing chat query: {e}")
