@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+langchain
+langchain-community # Added for Ollama and other newer integrations
+sentence-transformers
+chromadb
+PyPDF2
+python-docx
+markdown
+beautifulsoup4
+pandas
