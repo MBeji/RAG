@@ -9,3 +9,6 @@ python-docx
 markdown
 beautifulsoup4
 pandas
+pytest
+httpx
+werkzeug # For secure_filename
