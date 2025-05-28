@@ -1,0 +1,22 @@
+# General ignores
+.git
+.gitignore
+*.pyc
+__pycache__/
+.env
+*.env.*
+env/
+venv/
+.DS_Store
+
+# Frontend specific ignores
+frontend/chat-ui/node_modules/
+frontend/chat-ui/.env
+frontend/chat-ui/.env.*
+
+# Backend specific ignores
+backend/.venv/
+backend/data/
+
+# Root level node_modules (if any)
+node_modules/

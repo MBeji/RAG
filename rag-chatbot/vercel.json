@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "frontend/chat-ui/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "installCommand": "npm --prefix frontend/chat-ui install",
+        "buildCommand": "npm --prefix frontend/chat-ui run build",
+        "outputDirectory": "frontend/chat-ui/dist"
+      }
+    },
+    {
+      "src": "backend/app/main.py",
+      "use": "@vercel/python",
+      "config": {
+        "runtime": "python3.9",
+        "maxLambdaSize": "100mb",
+        "pipInstall": true,
+        "requirementsPath": "backend/requirements.txt"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "backend/app/main.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/chat-ui/dist/$1"
+    }
+  ]
+}

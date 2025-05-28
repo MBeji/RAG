@@ -157,3 +157,39 @@ Ensure all prerequisites are met and setup steps are completed.
 *   **Enhanced Error Handling:** More granular error messages and recovery options.
 *   **UI for Model Management:** Interface to see available Ollama models or select embedding models for upload.
 *   **Session Management:** Persist selected embedding models or other settings per session.
+
+## Deploying to Vercel
+
+This project is configured for easy deployment to [Vercel](https://vercel.com/).
+
+**Prerequisites:**
+
+*   A Vercel account.
+*   The Vercel CLI installed (`npm i -g vercel`) if you prefer deploying from your command line.
+
+**Deployment Steps:**
+
+1.  **Connect your Git repository to Vercel:**
+    *   Go to your Vercel dashboard and create a new project.
+    *   Choose your Git provider and select the repository for this project.
+2.  **Configure Project Settings:**
+    *   **Root Directory:** Vercel should automatically detect that the root directory for the deployment is `rag-chatbot` (or you might need to specify it if you're importing an existing monorepo). Ensure Vercel is looking inside the `rag-chatbot` folder if your repository has other projects at the root.
+    *   **Build & Development Settings:** The `vercel.json` file in the `rag-chatbot` directory provides the necessary build commands and output directories for both the frontend and backend. Vercel should automatically pick these up.
+        *   Frontend (Static): Built using `@vercel/static-build`.
+        *   Backend (Python/FastAPI): Served using `@vercel/python`.
+    *   **Environment Variables:** If your application requires any environment variables (e.g., API keys for external services, database URLs), add them in the Vercel project settings. (Note: Currently, no specific environment variables have been identified as mandatory for basic deployment from the codebase review, but this is a placeholder for future needs).
+3.  **Deploy:**
+    *   Once configured, Vercel will automatically build and deploy your project whenever you push changes to your connected Git branch (typically `main` or `master`).
+    *   Alternatively, you can deploy from your local machine using the Vercel CLI:
+        ```bash
+        cd rag-chatbot # Navigate to the directory containing vercel.json
+        vercel
+        ```
+        Follow the CLI prompts. To deploy to production, use `vercel --prod`.
+
+**Important Notes:**
+
+*   **Backend Data:** The backend is designed to store uploaded files in a `data` directory. On Vercel's ephemeral filesystem, data uploaded via the API will be temporary and will not persist across deployments or scaling instances. For persistent storage, consider integrating Vercel Blob, or an external database/storage solution. The current configuration ignores the local `backend/data/` directory in `.vercelignore`.
+*   **LLM Models:** The chat functionality relies on LLM models (e.g., specified as `llama2` in `ChatQuery`). Ensure that the LLM specified in your application is accessible by the Vercel deployment environment. If using Ollama, it needs to be hosted and accessible. For cloud-based LLMs, API keys would be needed as environment variables.
+
+This provides a basic guide. You might need to adjust settings based on specific Vercel project configurations or if you have a custom domain.
