@@ -28,7 +28,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "frontend/chat-ui/dist/$1"
+      "dest": "/index.html"
     }
   ]
 }
